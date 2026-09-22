@@ -53,7 +53,7 @@ header{flex:none;padding-top:12px}
 .meter{height:3px;background:var(--rule);border-radius:2px;margin-top:10px;overflow:hidden}
 .meter i{display:block;height:100%;background:var(--ink);width:0;transition:width .25s ease}
 
-.panel{background:var(--card);border-radius:12px;margin-top:10px;padding:6px 14px}
+.panel{background:var(--card);border-radius:12px;margin:0 0 14px;padding:6px 14px}
 .set-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--rule)}
 .set-row.col{display:block}
 .set-row:last-child{border-bottom:0}
@@ -70,6 +70,8 @@ header{flex:none;padding-top:12px}
 .io-row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center}
 .io-row .grow{flex:1}
 .field{margin:8px 0}
+.step{display:flex;gap:10px;align-items:flex-start;padding:8px 0}
+.step b{flex:none;width:22px;height:22px;border-radius:50%;background:var(--ink);color:var(--card);font-size:.75rem;display:grid;place-items:center;margin-top:2px}
 .field label{display:block;font-size:.8125rem;color:var(--muted);margin-bottom:3px}
 .form-actions{display:flex;gap:8px;margin:12px 0 8px}
 .solid{border:0;background:var(--ink);color:var(--card);border-radius:12px;padding:12px 18px;font-weight:600}
@@ -153,13 +155,11 @@ footer{flex:none;background:var(--desk);padding:10px 0 12px;border-top:1px solid
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
     </button>
   </div>
-  <div id="form" class="panel" hidden></div>
-  <div id="settings" class="panel" hidden></div>
   <div class="counts" id="counts"></div>
   <div class="meter" aria-hidden="true"><i id="meter"></i></div>
 </div></header>
 
-<main><div class="wrap" id="view"></div></main>
+<main><div class="wrap"><div id="form" class="panel" hidden></div><div id="settings" class="panel" hidden></div><div id="view"></div></div></main>
 <footer id="footer" hidden><div class="wrap" id="actions"></div></footer>
 
 <script>
@@ -181,7 +181,11 @@ var S={tab:"study",settingsOpen:false,formOpen:false,editId:null,saveError:false
 /* storage */
 var WKEY="vocab-words-v2",DKEY="vocab-deleted-v2",PKEY="vocab-progress-v1",OKEY="vocab-opt";
 function lsGet(k){try{var r=localStorage.getItem(k);return r?JSON.parse(r):null;}catch(e){return null;}}
-function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));S.saveError=false;return true;}catch(e){S.saveError=true;return false;}}
+var idb=null,BKEY="vocab-last-backup";
+function idbOpen(){return new Promise(function(res){try{var r=indexedDB.open("vocab-store",1);r.onupgradeneeded=function(){r.result.createObjectStore("kv");};r.onsuccess=function(){res(r.result);};r.onerror=function(){res(null);};r.onblocked=function(){res(null);};}catch(e){res(null);}});}
+function idbSet(k,v){if(!idb)return;try{idb.transaction("kv","readwrite").objectStore("kv").put(v,k);}catch(e){}}
+function idbGet(k){return new Promise(function(res){if(!idb)return res(null);try{var r=idb.transaction("kv").objectStore("kv").get(k);r.onsuccess=function(){res(r.result==null?null:r.result);};r.onerror=function(){res(null);};}catch(e){res(null);}});}
+function lsSet(k,v){var str=JSON.stringify(v),ok=false;try{localStorage.setItem(k,str);ok=true;}catch(e){}idbSet(k,str);S.saveError=!ok&&!idb;return ok;}
 function persistWords(){lsSet(WKEY,S.words);lsSet(DKEY,S.deleted);}
 function persistProg(){lsSet(PKEY,S.prog);}
 function saveOpt(){lsSet(OKEY,S.opt);}
@@ -247,6 +251,8 @@ function deleteWord(id){delete S.words[id];delete S.prog[id];S.deleted[id]=1;reb
   S.queue=S.queue.filter(function(x){return x!==id;});}
 
 /* import / export */
+function nodefText(){return S.order.filter(function(id){return !S.words[id].ko;}).map(function(id){return S.words[id].word;}).join("\n");}
+function listText(){var ids=S.listIds.slice();return JSON.stringify({v:2,exported:today(),words:ids.map(function(id){return clean(S.words[id]);})},null,1);}
 function exportText(){var ids;
   if(S.exScope==="list")ids=S.listIds.slice();
   else if(S.exScope==="nodef")ids=S.order.filter(function(id){return !S.words[id].ko;});
@@ -272,8 +278,18 @@ function doImport(txt){var r=parseImport(txt),add=0,upd=0,same=0,cards=0,k;
   var m=[];if(add)m.push("추가 "+add);if(upd)m.push("갱신 "+upd);if(same)m.push("변경 없음 "+same);if(cards)m.push("기록 "+cards);
   return m.length?m.join(", ")+"개":"들어온 항목이 없습니다";}
 function copyText(txt,btn,label){var done=function(){if(btn){btn.textContent="복사됨";setTimeout(function(){btn.textContent=label;},1500);}};
-  var fallback=function(){S.ioText=txt;render();var t=document.getElementById("io");if(t){t.focus();t.select();}};
+  var fallback=function(){S.ioText=txt;S.settingsOpen=true;render();var t=document.getElementById("io");if(t){t.focus();t.select();}};
   if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(txt).then(done,fallback);else fallback();}
+
+/* file backup */
+function backupText(){var ids=S.order.slice(),out={v:2,exported:today(),words:ids.map(function(id){return clean(S.words[id]);}),cards:{}};ids.forEach(function(id){if(S.prog[id])out.cards[id]=S.prog[id];});return JSON.stringify(out);}
+function saveFile(){var txt=backupText(),name="vocab-backup-"+today()+".json",blob=new Blob([txt],{type:"application/json"});
+  var mark=function(){lsSet(BKEY,today());render();};
+  try{var f=new File([blob],name,{type:"application/json"});
+    if(navigator.canShare&&navigator.share&&navigator.canShare({files:[f]})){navigator.share({files:[f],title:name}).then(mark,function(){});return;}}catch(e){}
+  try{var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},2000);mark();return;}catch(e){}
+  S.ioText=txt;S.settingsOpen=true;render();toast("파일 저장이 안 되는 환경입니다. 아래 텍스트를 복사해 두세요");}
+function loadFile(file){if(!file)return;var r=new FileReader();r.onload=function(){var m=doImport(String(r.result||""));render();toast("파일에서 "+m);};r.onerror=function(){toast("파일을 읽지 못했습니다");};r.readAsText(file);}
 
 /* render */
 function render(){
@@ -299,15 +315,15 @@ function renderForm(){var el=document.getElementById("form");el.hidden=!S.formOp
   el.innerHTML=h;}
 
 function renderSettings(){var el=document.getElementById("settings");el.hidden=!S.settingsOpen;if(!S.settingsOpen)return;
-  var h='';
+  var h='',lb=lsGet(BKEY),nodef=S.order.filter(function(id){return !S.words[id].ko;}).length;
   h+='<div class="set-row"><div>소리 먼저<small>'+(canSpeak?"카드에서 단어를 가린 채 음성만 듣고 뜻을 떠올립니다":"이 기기에서는 음성 재생을 쓸 수 없습니다")+'</small></div><button class="switch" role="switch" data-act="opt-audio" aria-checked="'+(S.opt.audioFirst?"true":"false")+'" '+(canSpeak?"":"disabled")+' aria-label="소리 먼저"></button></div>';
   h+='<div class="set-row"><div>천천히 읽기<small>음성 속도를 0.75배로</small></div><button class="switch" role="switch" data-act="opt-slow" aria-checked="'+(S.opt.slow?"true":"false")+'" '+(canSpeak?"":"disabled")+' aria-label="천천히 읽기"></button></div>';
   h+='<div class="set-row"><div>하루 신규 단어<small>복습은 수와 상관없이 전부 나옵니다</small></div><div class="steps">'+[10,15,20].map(function(n){return '<button data-act="opt-new" data-n="'+n+'" aria-pressed="'+(S.opt.newPerDay===n?"true":"false")+'">'+n+'</button>';}).join("")+'</div></div>';
-  h+='<div class="set-row col"><div>내보내기<small>복사한 텍스트를 AI에 보내 뜻·발음을 채운 뒤 아래에 붙여넣으면 덮어씌워집니다</small></div>';
-  h+='<div class="io-row"><div class="steps">'+[["all","전체"],["list","현재 리스트"],["nodef","뜻 없는 단어"]].map(function(f){return '<button data-act="ex-scope" data-s="'+f[0]+'" aria-pressed="'+(S.exScope===f[0]?"true":"false")+'">'+f[1]+'</button>';}).join("")+'</div></div>';
-  h+='<div class="io-row"><button class="pill" data-act="ex-prog" aria-pressed="'+(S.exProg?"true":"false")+'" style="'+(S.exProg?"background:var(--ink);color:var(--card);border-color:var(--ink)":"")+'">학습 기록 포함</button><button class="solid sm" data-act="export">복사</button></div></div>';
-  h+='<div class="set-row col"><div>가져오기<small>JSON, 또는 한 줄에 단어 하나(탭으로 뜻 구분 가능). 같은 단어는 빈 칸만이 아니라 값이 있는 칸을 모두 덮어씁니다</small></div>';
-  h+='<textarea id="io" placeholder="여기에 붙여넣기">'+esc(S.ioText)+'</textarea><div class="io-row"><button class="solid sm" data-act="import">가져오기</button><button class="pill" data-act="io-clear">비우기</button></div></div>';
+  h+='<div class="set-row col"><div>백업<small>단어와 학습 기록 전체를 파일로 저장·복구합니다. 마지막 백업: '+(lb?esc(lb):"없음")+'</small></div><div class="io-row"><button class="solid sm" data-act="file-save">파일로 저장</button><button class="pill" data-act="file-load">파일 불러오기</button><input type="file" id="file-in" accept=".json,application/json,text/plain" hidden></div></div>';
+  h+='<div class="set-row col"><div>AI로 뜻 채우기</div>';
+  h+='<div class="step"><b>1</b><div>뜻 없는 단어 목록을 복사합니다<div class="io-row"><button class="pill" data-act="copy-nodef" '+(nodef?"":"disabled")+'>뜻 없는 단어 '+nodef+'개 복사</button></div></div></div>';
+  h+='<div class="step"><b>2</b><div>Claude 채팅에 붙여넣고 "단어장 JSON으로 뜻·발음·예문 채워줘"라고 보냅니다</div></div>';
+  h+='<div class="step"><b>3</b><div>받은 내용을 아래에 붙여넣고 가져오기를 누릅니다<textarea id="io" placeholder="여기에 붙여넣기">'+esc(S.ioText)+'</textarea><div class="io-row"><button class="solid sm" data-act="import">가져오기</button><button class="pill" data-act="io-clear">비우기</button></div><small style="margin-top:6px">단어만 한 줄에 하나씩 붙여넣어도 추가됩니다</small></div></div></div>';
   h+='<div class="set-row"><div>학습 기록<small>모든 단어를 신규 상태로 되돌립니다</small></div><button class="pill danger" data-act="reset">'+(S.confirmReset?"한 번 더 누르면 초기화":"기록 초기화")+'</button></div>';
   if(el.innerHTML!==h){var had=document.activeElement&&document.activeElement.id==="io",v=had?document.activeElement.value:null;el.innerHTML=h;if(had){var t=document.getElementById("io");if(t){t.value=v;t.focus();}}}}
 
@@ -354,9 +370,9 @@ function renderList(){document.getElementById("footer").hidden=true;var view=doc
   var h=(S.toast?'<div class="toast">'+esc(S.toast)+'</div>':"");
   h+='<input class="search" id="q" type="search" placeholder="단어, 뜻으로 찾기" value="'+esc(S.q)+'" autocomplete="off">';
   h+='<div class="list-bar"><div class="seg small" role="group" aria-label="뜻 표시"><button data-act="lmode" data-m="show" aria-pressed="'+(!hideMode?"true":"false")+'">뜻 보기</button><button data-act="lmode" data-m="hide" aria-pressed="'+(hideMode?"true":"false")+'">뜻 숨기기</button></div>'+
-    (hideMode&&Object.keys(S.peek).length?'<button class="pill" data-act="peek-clear">모두 가리기</button>':'')+'</div>';
+    (hideMode&&Object.keys(S.peek).length?'<button class="pill" data-act="peek-clear">모두 가리기</button>':'<button class="pill" data-act="copy-list" title="현재 목록 복사">복사</button>')+'</div>';
   h+='<div class="filters">'+F.map(function(f){return '<button data-act="filter" data-f="'+f[0]+'" aria-pressed="'+(S.filter===f[0]?"true":"false")+'">'+f[1]+'</button>';}).join("")+'</div>';
-  if(!ids.length){h+='<div class="empty"><p>'+(S.order.length?(S.filter==="today"?"오늘 할 단어를 모두 확인했습니다":"조건에 맞는 단어가 없습니다"):"아직 단어가 없습니다")+'</p></div>';}
+  if(!ids.length){h+='<div class="empty"><p>'+(S.order.length?(S.filter==="today"?"오늘 할 단어를 모두 확인했습니다. 학습한 단어는 위의 전체·복습중 필터에서 볼 수 있습니다":"조건에 맞는 단어가 없습니다"):"아직 단어가 없습니다")+'</p></div>';}
   else{h+='<div class="rows">'+ids.map(function(id){var w=S.words[id],p=S.prog[id],b=bucket(w,p),g=S.graded[id],peek=!!S.peek[id],showKo=!hideMode||peek;
     var right='';
     if(g)right='<span class="row-r '+(g==="good"?"g":"b")+'">'+(g==="good"?"알아":"모름")+' · '+esc(p?inLabel(Math.max(1,(p.due>t)?Math.round((new Date(p.due)-new Date(t))/864e5):1)):"")+'</span>';
@@ -375,10 +391,10 @@ function renderList(){document.getElementById("footer").hidden=true;var view=doc
 /* events */
 document.addEventListener("click",function(ev){var b=ev.target.closest("[data-act]");if(!b)return;var a=b.dataset.act,w,id;
   if(a==="tab"){S.tab=b.dataset.tab;if(S.tab==="study"&&!S.done)buildQueue();if(S.tab==="list"){S.graded={};}render();}
-  else if(a==="settings"){S.settingsOpen=!S.settingsOpen;S.formOpen=false;S.confirmReset=false;render();}
-  else if(a==="add"){if(S.formOpen&&!S.editId){S.formOpen=false;}else{S.formOpen=true;S.editId=null;S.settingsOpen=false;document.getElementById("form").dataset.for="";}render();
+  else if(a==="settings"){S.settingsOpen=!S.settingsOpen;S.formOpen=false;S.confirmReset=false;render();document.querySelector("main").scrollTop=0;}
+  else if(a==="add"){if(S.formOpen&&!S.editId){S.formOpen=false;}else{S.formOpen=true;S.editId=null;S.settingsOpen=false;document.getElementById("form").dataset.for="";}render();document.querySelector("main").scrollTop=0;
     if(S.formOpen){var fw=document.getElementById("f-word");if(fw)fw.focus();}}
-  else if(a==="edit"){S.formOpen=true;S.editId=b.dataset.id;S.confirmDelete=null;S.settingsOpen=false;document.getElementById("form").dataset.for="";render();window.scrollTo(0,0);}
+  else if(a==="edit"){S.formOpen=true;S.editId=b.dataset.id;S.confirmDelete=null;S.settingsOpen=false;document.getElementById("form").dataset.for="";render();document.querySelector("main").scrollTop=0;}
   else if(a==="form-close"){S.formOpen=false;S.editId=null;render();}
   else if(a==="form-save"){var item={};document.querySelectorAll("#form [data-field]").forEach(function(i){item[i.dataset.field]=i.value;});
     if(!item.word.trim()){toast("단어를 입력하세요");return;}
@@ -397,35 +413,45 @@ document.addEventListener("click",function(ev){var b=ev.target.closest("[data-ac
   else if(a==="peek"){ev.preventDefault();id=b.dataset.id;if(S.peek[id])delete S.peek[id];else S.peek[id]=1;render();}
   else if(a==="peek-clear"){S.peek={};render();}
   else if(a==="lgrade"){ev.preventDefault();id=b.dataset.id;grade(id,b.dataset.k,false);S.graded[id]=b.dataset.k;delete S.peek[id];render();}
-  else if(a==="lmode"){S.listMode=b.dataset.m;S.peek={};render();}
+  else if(a==="lmode"){S.listMode=b.dataset.m;S.peek={};S.opt.listMode=S.listMode;saveOpt();render();}
   else if(a==="more"){S.extraNew+=5;buildQueue();render();autoSay();}
-  else if(a==="filter"){S.filter=b.dataset.f;S.graded={};render();}
+  else if(a==="filter"){S.filter=b.dataset.f;S.graded={};S.opt.filter=S.filter;saveOpt();render();}
   else if(a==="opt-audio"){S.opt.audioFirst=!S.opt.audioFirst&&canSpeak;saveOpt();render();}
   else if(a==="opt-slow"){S.opt.slow=!S.opt.slow;saveOpt();render();}
   else if(a==="opt-new"){S.opt.newPerDay=parseInt(b.dataset.n,10);saveOpt();if(!S.done)buildQueue();render();}
-  else if(a==="ex-scope"){S.exScope=b.dataset.s;render();}
-  else if(a==="ex-prog"){S.exProg=!S.exProg;render();}
-  else if(a==="export"){if(S.exScope==="list"&&!S.listIds.length){toast("리스트 탭에서 검색·필터로 범위를 먼저 정하세요");return;}copyText(exportText(),b,"복사");}
+  else if(a==="copy-nodef"){copyText(nodefText(),b,b.textContent);}
+  else if(a==="copy-list"){if(!S.listIds.length){toast("복사할 단어가 없습니다");return;}copyText(listText(),b,"복사");toast(S.listIds.length+"개 단어를 복사했습니다 (수정 후 설정에서 붙여넣어 가져오기)");}
+  else if(a==="file-save"){saveFile();}
+  else if(a==="file-load"){var fi=document.getElementById("file-in");if(fi)fi.click();}
   else if(a==="io-clear"){S.ioText="";var ta=document.getElementById("io");if(ta)ta.value="";}
   else if(a==="import"){var ta2=document.getElementById("io"),msg=doImport(ta2?ta2.value:"");S.ioText="";render();toast(msg);}
   else if(a==="reset"){if(!S.confirmReset){S.confirmReset=true;render();return;}
     S.confirmReset=false;S.prog={};S.failedToday={};S.graded={};S.extraNew=0;persistProg();buildQueue();render();}
 });
 document.addEventListener("toggle",function(ev){var d=ev.target;if(d.tagName==="DETAILS")S.openId=d.open?d.dataset.id:null;},true);
+document.addEventListener("change",function(ev){if(ev.target.id==="file-in"&&ev.target.files&&ev.target.files[0]){loadFile(ev.target.files[0]);ev.target.value="";}});
 document.addEventListener("input",function(ev){if(ev.target.id==="q"){S.q=ev.target.value;renderList();}else if(ev.target.id==="io"){S.ioText=ev.target.value;}});
 document.addEventListener("keydown",function(ev){if(S.tab!=="study"||/INPUT|TEXTAREA/.test(ev.target.tagName))return;
   if(ev.key===" "&&!S.revealed&&current()){ev.preventDefault();S.revealed=true;render();}
   else if(S.revealed&&ev.key==="1")rate("bad");else if(S.revealed&&ev.key==="2")rate("mid");else if(S.revealed&&ev.key==="3")rate("good");});
 
 /* init */
-(function(){var o=lsGet(OKEY);if(o){if(typeof o.audioFirst==="boolean")S.opt.audioFirst=o.audioFirst&&canSpeak;if([10,15,20].indexOf(o.newPerDay)>=0)S.opt.newPerDay=o.newPerDay;if(typeof o.slow==="boolean")S.opt.slow=o.slow;}
-  var stored=lsGet(WKEY),del=lsGet(DKEY)||{},k;S.deleted=del;
-  if(stored&&typeof stored==="object"){for(k in stored){if(stored[k]&&typeof stored[k].word==="string"){stored[k].id=k;S.words[k]=stored[k];}}}
-  var added=0;EMBEDDED.forEach(function(w){if(!S.words[w.id]&&!del[w.id]){S.words[w.id]=JSON.parse(JSON.stringify(w));added++;}});
-  rebuildOrder();if(added)persistWords();
-  var p=lsGet(PKEY);S.prog=(p&&typeof p==="object")?p:{};
-  buildQueue();render();autoSay();
-  try{if("serviceWorker" in navigator)navigator.serviceWorker.register("./sw.js").catch(function(){});}catch(e){}})();
+(function(){var o=lsGet(OKEY);if(o){if(typeof o.audioFirst==="boolean")S.opt.audioFirst=o.audioFirst&&canSpeak;if([10,15,20].indexOf(o.newPerDay)>=0)S.opt.newPerDay=o.newPerDay;if(typeof o.slow==="boolean")S.opt.slow=o.slow;if(typeof o.filter==="string")S.filter=o.filter;if(o.listMode==="show"||o.listMode==="hide")S.listMode=o.listMode;}
+  try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(function(){});}catch(e){}
+  function finish(stored,del,p){var k;S.deleted=(del&&typeof del==="object")?del:{};
+    if(stored&&typeof stored==="object"){for(k in stored){if(stored[k]&&typeof stored[k].word==="string"){stored[k].id=k;S.words[k]=stored[k];}}}
+    var added=0;EMBEDDED.forEach(function(w){if(!S.words[w.id]&&!S.deleted[w.id]){S.words[w.id]=JSON.parse(JSON.stringify(w));added++;}});
+    rebuildOrder();if(added)persistWords();
+    S.prog=(p&&typeof p==="object")?p:{};
+    buildQueue();render();autoSay();
+    try{if("serviceWorker" in navigator)navigator.serviceWorker.register("./sw.js").catch(function(){});}catch(e){}}
+  var ls={w:lsGet(WKEY),d:lsGet(DKEY),p:lsGet(PKEY)};
+  if(ls.w||ls.p){finish(ls.w,ls.d,ls.p);idbOpen().then(function(db){idb=db;if(db){idbSet(WKEY,JSON.stringify(S.words));idbSet(DKEY,JSON.stringify(S.deleted));idbSet(PKEY,JSON.stringify(S.prog));}});return;}
+  idbOpen().then(function(db){idb=db;return Promise.all([idbGet(WKEY),idbGet(DKEY),idbGet(PKEY)]);}).then(function(r){
+    var parse=function(x){try{return x?JSON.parse(x):null;}catch(e){return null;}};
+    var w=parse(r[0]),d=parse(r[1]),p=parse(r[2]);
+    if(w||p){try{if(r[0])localStorage.setItem(WKEY,r[0]);if(r[1])localStorage.setItem(DKEY,r[1]);if(r[2])localStorage.setItem(PKEY,r[2]);}catch(e){}S.toast="예비 저장소에서 기록을 복구했습니다";}
+    finish(w,d,p);},function(){finish(null,null,null);});})();
 })();
 </script>
 </body>
