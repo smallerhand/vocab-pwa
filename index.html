@@ -176,7 +176,7 @@ var S={tab:"study",settingsOpen:false,formOpen:false,editId:null,saveError:false
   words:{},order:[],deleted:{},prog:{},queue:[],done:0,revealed:false,failedToday:{},extraNew:0,
   filter:"today",q:"",listMode:"hide",peek:{},graded:{},listIds:[],
   exScope:"all",exProg:false,ioText:"",confirmReset:false,confirmDelete:null,
-  opt:{audioFirst:canSpeak,newPerDay:15,slow:false}};
+  opt:{audioFirst:canSpeak,newPerDay:15,slow:false,voice:""},voiceOpen:false};
 
 /* storage */
 var WKEY="vocab-words-v2",DKEY="vocab-deleted-v2",PKEY="vocab-progress-v1",OKEY="vocab-opt";
@@ -206,12 +206,25 @@ function clean(o){var r={},k;for(k in o){if(o[k]!==""&&o[k]!=null)r[k]=o[k];}ret
 function toast(m){S.toast=m;render();setTimeout(function(){if(S.toast===m){S.toast="";render();}},2200);}
 
 /* speech */
-var voice=null;
-function pickVoice(){if(!canSpeak)return;try{var vs=speechSynthesis.getVoices()||[];
-  voice=vs.filter(function(v){return /^en[-_]US/i.test(v.lang);})[0]||vs.filter(function(v){return /^en/i.test(v.lang);})[0]||null;}catch(e){}}
-if(canSpeak){pickVoice();try{speechSynthesis.addEventListener("voiceschanged",pickVoice);}catch(e){}}
+var voice=null,VOICES=[];
+function vQuality(v){var u=(v.voiceURI||"")+" "+(v.name||"");
+  if(/premium|プレミアム|프리미엄/i.test(u))return 3;if(/enhanced|拡張|향상/i.test(u))return 2;
+  if(/speech\.synthesis|eloquence|novelty/i.test(u))return 0;return 1;}
+function vRegion(l){l=String(l||"").replace("_","-");if(/en-US/i.test(l))return"미국";if(/en-GB/i.test(l))return"영국";if(/en-AU/i.test(l))return"호주";if(/en-IE/i.test(l))return"아일랜드";if(/en-IN/i.test(l))return"인도";if(/en-ZA/i.test(l))return"남아공";if(/en-CA/i.test(l))return"캐나다";return l;}
+function vQLabel(q){return q===3?"프리미엄":q===2?"고품질":q===0?"특수":"기본";}
+function vName(v){return String(v.name||"").replace(/\s*\((Premium|Enhanced|プレミアム|拡張)\)\s*/ig,"").trim()||v.voiceURI;}
+function loadVoices(){if(!canSpeak)return;try{var vs=speechSynthesis.getVoices()||[];
+  VOICES=vs.filter(function(v){return /^en/i.test(v.lang)&&vQuality(v)>0;});
+  VOICES.sort(function(a,b){var ra=/en[-_]US/i.test(a.lang)?0:/en[-_]GB/i.test(a.lang)?1:2,rb=/en[-_]US/i.test(b.lang)?0:/en[-_]GB/i.test(b.lang)?1:2;
+    return (vQuality(b)-vQuality(a))||(ra-rb)||(vName(a)<vName(b)?-1:1);});
+  voice=null;
+  if(S.opt.voice){voice=VOICES.filter(function(v){return v.voiceURI===S.opt.voice;})[0]||null;}
+  if(!voice){var us=VOICES.filter(function(v){return /en[-_]US/i.test(v.lang);});voice=us[0]||VOICES[0]||null;}
+  if(S.settingsOpen)renderSettings();}catch(e){}}
+function pickVoice(){loadVoices();}
+if(canSpeak){loadVoices();try{speechSynthesis.addEventListener("voiceschanged",loadVoices);}catch(e){}setTimeout(loadVoices,800);}
 function speak(text){if(!canSpeak||!text)return;try{speechSynthesis.cancel();
-  var u=new SpeechSynthesisUtterance(text);u.lang="en-US";if(voice)u.voice=voice;u.rate=S.opt.slow?0.75:0.95;speechSynthesis.speak(u);}catch(e){}}
+  var u=new SpeechSynthesisUtterance(text);u.lang=voice?voice.lang:"en-US";if(voice)u.voice=voice;u.rate=S.opt.slow?0.75:0.95;speechSynthesis.speak(u);}catch(e){}}
 
 /* queue (card mode) */
 function buildQueue(){var t=today(),due=[],fresh=[],introduced=0,k;
@@ -318,6 +331,12 @@ function renderSettings(){var el=document.getElementById("settings");el.hidden=!
   var h='',lb=lsGet(BKEY),nodef=S.order.filter(function(id){return !S.words[id].ko;}).length;
   h+='<div class="set-row"><div>소리 먼저<small>'+(canSpeak?"카드에서 단어를 가린 채 음성만 듣고 뜻을 떠올립니다":"이 기기에서는 음성 재생을 쓸 수 없습니다")+'</small></div><button class="switch" role="switch" data-act="opt-audio" aria-checked="'+(S.opt.audioFirst?"true":"false")+'" '+(canSpeak?"":"disabled")+' aria-label="소리 먼저"></button></div>';
   h+='<div class="set-row"><div>천천히 읽기<small>음성 속도를 0.75배로</small></div><button class="switch" role="switch" data-act="opt-slow" aria-checked="'+(S.opt.slow?"true":"false")+'" '+(canSpeak?"":"disabled")+' aria-label="천천히 읽기"></button></div>';
+  if(canSpeak){var cur=voice?vName(voice)+" · "+vRegion(voice.lang)+" · "+vQLabel(vQuality(voice)):"없음",hq=VOICES.filter(function(v){return vQuality(v)>=2;}).length;
+    h+='<div class="set-row col"><div>음성<small>현재: '+esc(cur)+(S.opt.voice?"":" (자동)")+'. 누르면 미리 들어보고 그 음성으로 고정됩니다.'+(hq?"":" 고품질 음성이 목록에 없습니다. 내려받은 뒤 앱을 완전히 종료하고 다시 열어 보세요.")+'</small></div>';
+    h+='<div class="io-row"><button class="pill" data-act="voice-open">'+(S.voiceOpen?"목록 닫기":"음성 고르기 ("+VOICES.length+"개)")+'</button>'+(S.opt.voice?'<button class="pill" data-act="voice-auto">자동으로</button>':'')+'</div>';
+    if(S.voiceOpen){h+='<div class="steps" style="flex-direction:column;align-items:stretch;margin-top:8px">'+VOICES.map(function(v,i){var on=voice&&v.voiceURI===voice.voiceURI;
+      return '<button data-act="voice-pick" data-i="'+i+'" aria-pressed="'+(on?"true":"false")+'" style="text-align:left;display:flex;justify-content:space-between;gap:8px"><span>'+esc(vName(v))+' · '+esc(vRegion(v.lang))+'</span><span style="opacity:.75">'+vQLabel(vQuality(v))+'</span></button>';}).join("")+'</div>';}
+    h+='</div>';}
   h+='<div class="set-row"><div>하루 신규 단어<small>복습은 수와 상관없이 전부 나옵니다</small></div><div class="steps">'+[10,15,20].map(function(n){return '<button data-act="opt-new" data-n="'+n+'" aria-pressed="'+(S.opt.newPerDay===n?"true":"false")+'">'+n+'</button>';}).join("")+'</div></div>';
   h+='<div class="set-row col"><div>백업<small>단어와 학습 기록 전체를 파일로 저장·복구합니다. 마지막 백업: '+(lb?esc(lb):"없음")+'</small></div><div class="io-row"><button class="solid sm" data-act="file-save">파일로 저장</button><button class="pill" data-act="file-load">파일 불러오기</button><input type="file" id="file-in" accept=".json,application/json,text/plain" hidden></div></div>';
   h+='<div class="set-row col"><div>AI로 뜻 채우기</div>';
@@ -418,6 +437,9 @@ document.addEventListener("click",function(ev){var b=ev.target.closest("[data-ac
   else if(a==="filter"){S.filter=b.dataset.f;S.graded={};S.opt.filter=S.filter;saveOpt();render();}
   else if(a==="opt-audio"){S.opt.audioFirst=!S.opt.audioFirst&&canSpeak;saveOpt();render();}
   else if(a==="opt-slow"){S.opt.slow=!S.opt.slow;saveOpt();render();}
+  else if(a==="voice-open"){S.voiceOpen=!S.voiceOpen;loadVoices();render();}
+  else if(a==="voice-pick"){var vv=VOICES[parseInt(b.dataset.i,10)];if(vv){S.opt.voice=vv.voiceURI;saveOpt();voice=vv;render();speak("Welcome aboard. This is how I sound.");}}
+  else if(a==="voice-auto"){S.opt.voice="";saveOpt();loadVoices();render();speak("Welcome aboard.");}
   else if(a==="opt-new"){S.opt.newPerDay=parseInt(b.dataset.n,10);saveOpt();if(!S.done)buildQueue();render();}
   else if(a==="copy-nodef"){copyText(nodefText(),b,b.textContent);}
   else if(a==="copy-list"){if(!S.listIds.length){toast("복사할 단어가 없습니다");return;}copyText(listText(),b,"복사");toast(S.listIds.length+"개 단어를 복사했습니다 (수정 후 설정에서 붙여넣어 가져오기)");}
@@ -436,7 +458,7 @@ document.addEventListener("keydown",function(ev){if(S.tab!=="study"||/INPUT|TEXT
   else if(S.revealed&&ev.key==="1")rate("bad");else if(S.revealed&&ev.key==="2")rate("mid");else if(S.revealed&&ev.key==="3")rate("good");});
 
 /* init */
-(function(){var o=lsGet(OKEY);if(o){if(typeof o.audioFirst==="boolean")S.opt.audioFirst=o.audioFirst&&canSpeak;if([10,15,20].indexOf(o.newPerDay)>=0)S.opt.newPerDay=o.newPerDay;if(typeof o.slow==="boolean")S.opt.slow=o.slow;if(typeof o.filter==="string")S.filter=o.filter;if(o.listMode==="show"||o.listMode==="hide")S.listMode=o.listMode;}
+(function(){var o=lsGet(OKEY);if(o){if(typeof o.audioFirst==="boolean")S.opt.audioFirst=o.audioFirst&&canSpeak;if([10,15,20].indexOf(o.newPerDay)>=0)S.opt.newPerDay=o.newPerDay;if(typeof o.slow==="boolean")S.opt.slow=o.slow;if(typeof o.voice==="string"){S.opt.voice=o.voice;loadVoices();}if(typeof o.filter==="string")S.filter=o.filter;if(o.listMode==="show"||o.listMode==="hide")S.listMode=o.listMode;}
   try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(function(){});}catch(e){}
   function finish(stored,del,p){var k;S.deleted=(del&&typeof del==="object")?del:{};
     if(stored&&typeof stored==="object"){for(k in stored){if(stored[k]&&typeof stored[k].word==="string"){stored[k].id=k;S.words[k]=stored[k];}}}
